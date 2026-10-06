@@ -1,4 +1,6 @@
 from flask import Flask, jsonify, request
+import requests
+import off_client
 
 app = Flask(__name__)
 
@@ -92,6 +94,42 @@ def delete_item(item_id):
     inventory.remove(item)
     return jsonify(message="Item deleted"), 200
 
+def _lookup(barcode):
+    try:
+        return off_client.fetch_by_barcode(barcode), None
+    except off_client.ProductNotFound as e:
+        return None, (jsonify(error=str(e)), 404)
+    except requests.RequestException:
+        return None, (jsonify(error="OpenFoodFacts is unavailable"), 502)
 
+
+@app.get("/lookup/barcode/<barcode>")
+def lookup_barcode(barcode):
+    product, err = _lookup(barcode)
+    return err if err else (jsonify(product), 200)
+
+
+@app.get("/lookup/search")
+def lookup_search():
+    name = request.args.get("name", "").strip()
+    if not name:
+        return jsonify(error="name query parameter is required"), 400
+    try:
+        return jsonify(off_client.search_by_name(name)), 200
+    except requests.RequestException:
+        return jsonify(error="OpenFoodFacts is unavailable"), 502
+
+
+@app.post("/inventory/import/<barcode>")
+def import_product(barcode):
+    product, err = _lookup(barcode)
+    if err:
+        return err
+    overrides = request.get_json(silent=True) or {}
+    product.update({k: overrides[k] for k in ("price", "quantity", "name") if k in overrides})
+    error = validate(product)
+    if error:
+        return jsonify(error=error), 400
+    return jsonify(create_item(product)), 201
 if __name__ == "__main__":
     app.run(debug=True)
